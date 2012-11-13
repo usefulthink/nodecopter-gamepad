@@ -13,10 +13,9 @@ describe('gamepad server', function() {
             server.listen(23456);
             gamepad.listen(server);
 
-            var files = [
+            var requestsComplete = 0, files = [
                 'gamepad-client.js',
-                'gamepad-calibration.js',
-                'gamepad-test.html'
+                'gamepad-calibration.js'
             ];
 
             files.forEach(function(filename, idx) {
@@ -31,14 +30,14 @@ describe('gamepad server', function() {
                         expect(content).toBe(expectedContent);
 
                         // close down the server and complete the test when all assets where loaded
-                        if(idx+1 == files.length) {
-                            finish();
-                        }
+                        if(++requestsComplete == files.length) { finish(); }
                     });
                 });
             });
 
             function finish() {
+                expect(requestsComplete).toBe(files.length);
+
                 server.close();
                 done();
             }
@@ -105,62 +104,103 @@ describe('gamepad server', function() {
 
         beforeEach(function() {
             // create a mock-client with spies attached
-            droneClient = jasmine.createSpyObj('droneClient', movements.concat(actions));
+            var spies = jasmine.createSpyObj('droneClient', movements.concat(actions));
+
+            droneClient = new EventEmitter();
+            for(var method in spies) {
+                if(!spies.hasOwnProperty(method)) { continue; }
+
+                droneClient[method] = spies[method];
+            }
+
             eventSource = new EventEmitter();
 
             gamepad.init(droneClient, eventSource);
+            droneClient.emit('navdata', { droneState: { flying: true }});
         });
 
-        it('should handle all movement-commands', function() {
-            movements.forEach(function(movement, idx) {
-                eventSource.emit('control', { action: movement, speed: 1/(idx+2) });
+        describe('movements, actions and animations', function() {
+            it('should handle all movement-commands', function() {
+                movements.forEach(function(movement, idx) {
+                    eventSource.emit('control', { action: movement, speed: 1/(idx+2) });
 
-                expect(droneClient[movement]).toHaveBeenCalledWith(1/(idx+2) );
+                    expect(droneClient[movement]).toHaveBeenCalledWith(1/(idx+2) );
+                });
+            });
+            it('should handle all actions', function() {
+                actions.forEach(function(action, idx) {
+                    if(action == 'animate') { return; }
+                    if(action == 'takeoffOrLand') { return; }
+
+                    eventSource.emit('control', { action: action });
+
+                    expect(droneClient[action]).toHaveBeenCalledWith();
+                });
+            });
+            it('should handle all animations', function() {
+                animations.forEach(function(animation, idx) {
+                    eventSource.emit('control', { action: 'animate', animation: animation, duration: idx });
+
+                    expect(droneClient.animate).toHaveBeenCalledWith(animation, idx);
+                });
+            });
+            it('should handle movements without speed values as if a value of 1 was sent', function() {
+                movements.forEach(function(movement, idx) {
+                    eventSource.emit('control', { action: movement });
+                    expect(droneClient[movement]).toHaveBeenCalledWith(1);
+                });
+            });
+            it('should log an error for invalid commands', function() {
+                spyOn(console, 'error');
+
+                eventSource.emit('control', { action: 'foo' });
+
+                expect(console.error).toHaveBeenCalledWith('invalid action foo');
+            });
+            it('should log an error for invalid animations', function() {
+                spyOn(console, 'error');
+
+                eventSource.emit('control', { action: 'animate', animation: 'fnordfoo' });
+
+                expect(console.error).toHaveBeenCalledWith('invalid animation fnordfoo');
+                expect(droneClient.animate).not.toHaveBeenCalled();
+            });
+            it('should log an error for out-of-bound values and limit values to [0-1]', function() {
+                spyOn(console, 'error');
+
+                eventSource.emit('control', { action: 'left', speed: 500 });
+
+                expect(console.error).toHaveBeenCalledWith('out of bound value 500');
+                expect(droneClient.left).toHaveBeenCalledWith(1);
             });
         });
 
-        it('should handle all actions', function() {
-            actions.forEach(function(action, idx) {
-                if(action == 'animate') { return; }
+        describe('takeoffOrLand control-event', function() {
+            it('should takeoff if drone is not flying', function() {
+                droneClient.emit('navdata', { droneState: { flying : false }});
+                eventSource.emit('control', { action: 'takeoffOrLand' });
 
-                eventSource.emit('control', { action: action });
+                expect(droneClient.takeoff).toHaveBeenCalled();
+            });
+            it('should land if drone is flying', function() {
+                droneClient.emit('navdata', { droneState: { flying : true }});
+                eventSource.emit('control', { action: 'takeoffOrLand' });
 
-                expect(droneClient[action]).toHaveBeenCalledWith();
+                expect(droneClient.land).toHaveBeenCalled();
             });
         });
 
-        it('should handle all animations', function() {
-            animations.forEach(function(animation, idx) {
-                eventSource.emit('control', { action: 'animate', animation: animation, duration: idx });
+        describe('navdata-dependency', function() {
+            it('should log an error when flying-state is undefined', function() {
+                spyOn(console, 'error');
 
-                expect(droneClient.animate).toHaveBeenCalledWith(animation, idx);
+                // flying-state is undefined (kinda reverts the initialization from beforeEach)
+                droneClient.emit('navdata', { droneState: {}});
+                eventSource.emit('control', { action: 'left', speed: 0.5 });
+
+                expect(console.error).toHaveBeenCalledWith('undefined flying-state, not sending command');
             });
         });
 
-        it('should log an error for invalid commands', function() {
-            spyOn(console, 'error');
-
-            eventSource.emit('control', { action: 'foo' });
-
-            expect(console.error).toHaveBeenCalledWith('invalid action foo');
-        });
-
-        it('should log an error for invalid animations', function() {
-            spyOn(console, 'error');
-
-            eventSource.emit('control', { action: 'animate', animation: 'fnordfoo' });
-
-            expect(console.error).toHaveBeenCalledWith('invalid animation fnordfoo');
-            expect(droneClient.animate).not.toHaveBeenCalled();
-        });
-
-        it('should log an error for out-of-bound values and limit values to [0-1]', function() {
-            spyOn(console, 'error');
-
-            eventSource.emit('control', { action: 'left', speed: 500 });
-
-            expect(console.error).toHaveBeenCalledWith('out of bound value 500');
-            expect(droneClient.left).toHaveBeenCalledWith(1);
-        });
     });
 });
