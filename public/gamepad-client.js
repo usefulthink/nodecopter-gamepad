@@ -1,4 +1,4 @@
-(function(global) {
+(function(exports) {
     "use strict";
 
     // lookup-tables
@@ -26,8 +26,7 @@
     };
 
 
-    var exports = global.nodecopter = global.nodecopter || {},
-        socket = null;
+    var socket = null;
 
     /**
      * initializes the gamepad-controls
@@ -64,11 +63,13 @@
         btnUp: false, btnDown: false
     };
 
+    var getCalibratedValue = exports.getCalibratedValue || function(axes,idx) { return axes[idx]; };
+
     function handleGamepadState(gamepad) {
         var leftX, leftY;
 
-        leftX = exports.getCalibratedValue(gamepad, AXES.LEFT_ANALOGUE_HOR);
-        leftY = exports.getCalibratedValue(gamepad, AXES.LEFT_ANALOGUE_VERT);
+        leftX = getCalibratedValue(gamepad.axes, AXES.LEFT_ANALOGUE_HOR);
+        leftY = getCalibratedValue(gamepad.axes, AXES.LEFT_ANALOGUE_VERT);
 
         // this is for better readability only and might be inlined.
         // (I suspect the js-engine will likely inline it anyway).
@@ -93,17 +94,18 @@
 
         // ---- logging
         // TODO: emit a gamepadState-event or something
+        document.querySelector('.log').innerHTML = JSON.stringify(gamepadState, null, 2);
 
         // ---- analogue-stick left/right
         var horiz=gamepadState.leftX;
         if(horiz != lastGamepadState.leftX) {
             if(horiz<0) { // negative: left
-                socket.emit('move', { action: 'left', speed: -horiz });
+                socket.emit('control', { action: 'left', speed: -horiz });
             } else if(horiz>0) {
-                socket.emit('move', { action: 'right', speed: horiz });
+                socket.emit('control', { action: 'right', speed: horiz });
             } else { // == 0
-                socket.emit('move', { action: 'left', speed: 0 });
-                socket.emit('move', { action: 'right', speed: 0 });
+                socket.emit('control', { action: 'left', speed: 0 });
+                socket.emit('control', { action: 'right', speed: 0 });
             }
         }
 
@@ -111,40 +113,36 @@
         var leftY=gamepadState.leftY;
         if(leftY != lastGamepadState.leftY) {
             if(leftY<0) { // negative: up
-                socket.emit('move', { action: 'front', speed: -leftY });
+                socket.emit('control', { action: 'front', speed: -leftY });
             } else if(leftY>0) {
-                socket.emit('move', { action: 'back', speed: leftY });
+                socket.emit('control', { action: 'back', speed: leftY });
             } else { // == 0
-                socket.emit('move', { action: 'front', speed: 0 });
-                socket.emit('move', { action: 'back', speed: 0 });
+                socket.emit('control', { action: 'front', speed: 0 });
+                socket.emit('control', { action: 'back', speed: 0 });
             }
         }
 
         // ---- takeoff/land
         if(gamepadState.btnStart && !lastGamepadState.btnStart) {
-            if(!droneState.flying) {
-                socket.emit('drone', { action: 'takeoff' });
-            } else {
-                socket.emit('drone', { action: 'land' });
-            }
+            socket.emit('control', { action: 'takeoffOrLand' });
         }
 
         // ---- stop-button
         if(gamepadState.btnStop && !lastGamepadState.btnStop) {
-            socket.emit('drone', { action: 'stop' });
+            socket.emit('control', { action: 'stop' });
         }
 
         // ---- up/down/cw/ccw buttons (TODO: add accelleration for more fine-grained control)
         var evMap = {
-            btnUp: { ev: 'move', action: 'up', mode: 'toggleSpeed' },
-            btnDown: { ev: 'move', action: 'down', mode: 'toggleSpeed' },
-            btnTurnCW: { ev: 'move', action: 'clockwise', mode: 'toggleSpeed' },
-            btnTurnCCW: { ev: 'move', action: 'counterClockwise', mode: 'toggleSpeed' },
+            btnUp: { action: 'up', mode: 'toggleSpeed' },
+            btnDown: { action: 'down', mode: 'toggleSpeed' },
+            btnTurnCW: { action: 'clockwise', mode: 'toggleSpeed' },
+            btnTurnCCW: { action: 'counterClockwise', mode: 'toggleSpeed' },
 
-            btnFlipFwd: { ev: 'animate', action: 'flipAhead', mode: 'trigger' },
-            btnFlipBwd: { ev: 'animate', action: 'flipBehind', mode: 'trigger' },
-            btnFlipLeft: { ev: 'animate', action: 'flipLeft', mode: 'trigger' },
-            btnFlipRight: { ev: 'animate', action: 'flipRight', mode: 'trigger' }
+            btnFlipFwd: { action: 'animate', animation: 'flipAhead', mode: 'trigger' },
+            btnFlipBwd: { action: 'animate', animation: 'flipBehind', mode: 'trigger' },
+            btnFlipLeft: { action: 'animate', animation: 'flipLeft', mode: 'trigger' },
+            btnFlipRight: { action: 'animate', animation: 'flipRight', mode: 'trigger' }
         };
 
         Object.keys(evMap).forEach(function(btnId) {
@@ -154,17 +152,43 @@
 
             if('toggleSpeed' == evData.mode) {
                 if(curr && !last) { // btnPress
-                    socket.emit(evData.ev, { action: evData.action, speed: 1 });
+                    socket.emit('control', { action: evData.action, speed: 1 });
                 } else if(!curr && last) { // btnRelease
-                    socket.emit(evData.ev, { action: evData.action, speed: 0 });
+                    socket.emit('control', { action: evData.action, speed: 0 });
                 }
             } else if('trigger' == evData.mode) {
                 if(curr && !last) {
-                    socket.emit(evData.ev, { action: evData.action, duration: 15 });
+                    socket.emit('control', { action: evData.action, duration: 15 });
                 }
             }
         });
 
         lastGamepadState = gamepadState;
     };
-} (this));
+} ( (typeof exports === 'undefined')? (this.nodecopterGamepad = this.nodecopterGamepad||{}) : exports) );
+
+// RAF-Polyfill
+(function(window) {
+    var lastTime = 0;
+    var vendors = ['ms', 'moz', 'webkit', 'o'];
+    for(var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
+        window.requestAnimationFrame = window[vendors[x]+'RequestAnimationFrame'];
+        window.cancelAnimationFrame =
+            window[vendors[x]+'CancelAnimationFrame'] || window[vendors[x]+'CancelRequestAnimationFrame'];
+    }
+
+    if (!window.requestAnimationFrame)
+        window.requestAnimationFrame = function(callback, element) {
+            var currTime = new Date().getTime();
+            var timeToCall = Math.max(0, 16 - (currTime - lastTime));
+            var id = window.setTimeout(function() { callback(currTime + timeToCall); },
+                timeToCall);
+            lastTime = currTime + timeToCall;
+            return id;
+        };
+
+    if (!window.cancelAnimationFrame)
+        window.cancelAnimationFrame = function(id) {
+            clearTimeout(id);
+        };
+}(window||{}));

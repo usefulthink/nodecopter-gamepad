@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+
+<pre class="log">no data</pre>
+
+<script src="/nodecopter-gamepad/gamepad-client.js"></script>
+<script src="/nodecopter-gamepad/gamepad-calibration.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+
+<script>
+var gamepadSocket = io.connect(document.location.origin + '/nodecopter-gamepad');
+
+nodecopterGamepad.initGamepad(gamepadSocket);
+</script>
